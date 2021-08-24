@@ -27,27 +27,17 @@ class LongController extends AppController {
     private $RangeH = 51500;
     private $RangeL = 47000;
     private $side = "long"; // LONG или SHORT
-    private $step = 20; // Размер шага между ордерами
+    private $step = 50; // Размер шага между ордерами
 
-
-    //СКОРИНГ
-    private $limitmoneta = 4000; // Лимит объемов торгов для скоринга
 
     // МАНИ МЕНЕДЖМЕНТ 1  
-    private $stopl = 7; // Выключение всего скрипта при просадке депозита
-    private $maxprofit = 4; // Профит с которого начинаем трелить
-    private $trellingstep = 0.5; // Профит с которого будем выходить
-    private $timew = 20; // В минутах ожидание после завершение цикла
-
 
 
     // Переменные для стратегии
-    private $maxposition = 30; // Максимальный размер позиции
+    private $maxposition = 10; // Максимальный размер позиции
     private $skolz = 1; // ШАГ выше которого выставляется лимитник
     private $stopdistantion = 5; // Дистанция после которой переставляем ордера
 
-
-    private $MARKET = false; // Работа по маркету или нет
 
 
     // ТЕХНИЧЕСКИЕ ПЕРЕМЕННЫЕ
@@ -107,15 +97,9 @@ class LongController extends AppController {
 
         $this->BALANCE = $this->GetBal()['USDT'];
 
-
         $this->ORDERBOOK = $this->GetOrderBook($this->symbol);
 
         $this->KLINES = $this->EXCHANGECCXT->fetch_ohlcv($this->symbol, '1h', null, 15);
-        $pricenow = $this->GetPriceSide($this->symbol, "long");
-
-        $this->SCORING = $this->CheckOrderSCORING($pricenow); // Скоринг при запуске скрипта
-;
-
 
         // РАСЧЕТ ОРДЕРОВ
         $this->work();
@@ -127,10 +111,7 @@ class LongController extends AppController {
 
     public function work(){
 
-
         $TREK = $this->GetTreksBD();
-
-
 
         foreach ($TREK as $key => $row) {
             //Проверка на работу трека
@@ -194,17 +175,19 @@ class LongController extends AppController {
         $rangeh = $this->RangeH;
         $rangel = $this->RangeL;
 
+        $avg = ($rangeh + $rangel)/2;
+        $avg = round($avg);
 
         $ARR['emailex'] = $this->emailex;
         $ARR['status'] = 1;
         $ARR['action'] = "ControlOrders";
         $ARR['contrpoz'] = 0;
-        $ARR['market'] = $this->MARKET;
         $ARR['symbol'] = $this->symbol;
         $ARR['lever'] = $this->leverege;
         $ARR['step'] = $this->step;
         $ARR['rangeh'] = $rangeh;
         $ARR['rangel'] = $rangel;
+        $ARR['avg'] = $avg;
         $ARR['countplus'] = 0;
         $ARR['countstop'] = 0;
         $ARR['workside'] = $this->side;
@@ -217,7 +200,6 @@ class LongController extends AppController {
         $idtrek = $this->AddARRinBD($ARR);
         echo "<b><font color='green'>ДОБАВИЛИ ТРЕК</font></b>";
         // Добавление ТРЕКА в БД
-
 
         // Добавление ордеров в БД
         foreach ($this->MASSORDERS as $key=>$val){
@@ -232,7 +214,6 @@ class LongController extends AppController {
             $this->AddARRinBD($ARR, "orders");
         }
 
-
         // Добавление ордеров в БД
         return true;
 
@@ -242,31 +223,18 @@ class LongController extends AppController {
     private function WorkStatus1($TREK)
     {
 
-        //ЗАКРЫТИЕ ТРЕКА
-        // $this->KillCycle($TREK);
-
         // Блокировка входа
-
-
         $pricenow = $this->GetPriceSide($this->symbol, $TREK['workside']);
-
 
         // Контроль коридора
         $WorkSide = $this->GetWorkSide($pricenow, $TREK);
         show($WorkSide);
 
 
-        // Контроль баланса
-        $this->ControlBalance($TREK);
-
-
-
-
         // Вывод рабочей информации
         echo "<h3>Базовые параметры</h3>";
         echo "<b>Верхняя граница коридора:</b>".$TREK['rangeh']."<br>";
         echo "<b>Нижняя граница коридора:</b>".$TREK['rangel']."<br>";
-
 
 
         if ($WorkSide == "HIEND" || $WorkSide == "LOWEND"){
@@ -276,21 +244,8 @@ class LongController extends AppController {
             return true;
         }
 
-
-        if ($this->SCORING === FALSE){
-            echo "<b color='RED'>СКОРИНГ НЕ ПРОЙДЕН</b>";
-
-            $this->CloseCycle($TREK, "SCORING"); // Закрытие цикла при выходе из коридора
-
-            return false;
-        }
-
-
-
         // РАБОТА С ОРДЕРАМИ
         if ($TREK['action'] == "ControlOrders") $this->ActionControlOrders($TREK, $pricenow);
-
-
         // Контроллер ситуации
 
         return true;
@@ -305,7 +260,6 @@ class LongController extends AppController {
         $LASTZAPIS = R::findOne("cycle", 'WHERE trekid =?', [$TREK['id']]);
 
         // Результат выхода
-
         show($LASTZAPIS['typeclose']);
 
 
@@ -319,40 +273,10 @@ class LongController extends AppController {
         var_dump($this->SCORING);
         echo "<hr>";
 
-        if ($this->SCORING === FALSE){
-            echo "Ждем положительного скоринга";
-            return false;
-        }
-
         if ($LASTZAPIS['typeclose'] == "STOP"){
             if ($timewait > $this->timew*2)  R::trash($TREK);
             // Запускаем через время оиждания
         }
-
-        if ($LASTZAPIS['typeclose'] == "TRELLING"){
-
-            echo "TW:".$timewait." - ".$this->timew."<br>";
-
-            if ($timewait > $this->timew)  R::trash($TREK);
-            // Запускаем через время оиждания
-        }
-
-
-        if ($LASTZAPIS['typeclose'] == "LEAVE"){
-
-            echo "Вышли из глобального коридора";
-            return false;
-            //if ($timewait > $this->timewait)  R::trash($TREK);
-            // Запускаем через время оиждания
-        }
-
-
-
-        if ($LASTZAPIS['typeclose'] == "SCORING") R::trash($TREK);
-
-
-
-
 
 
         return true;
@@ -381,10 +305,6 @@ class LongController extends AppController {
         // ОБРАБОТКА ОРДЕРОВ СТАТУСА 2
 
 
-        // КОНТРОЛЛЕР ЛИШНЕЙ ПОЗИЦИИ
-        // КОНТРОЛЛЕР ЛИШНЕЙ ПОЗИЦИИ
-
-
         echo "<hr>";
         // ОБРАБОТКА ОРДЕРОВ СТАТУСА 1
         $this->WorkStat1($TREK, $AllOrdersREST, $pricenow);
@@ -402,6 +322,7 @@ class LongController extends AppController {
         $OrdersBD = $this->GetOrdersBD($TREK, 2);
         echo "<h3>ОБРАБОТКА ОРДЕРОВ СТАТУСА 2</h3>";
         // Ордер на наращивание позиции
+
 
 
         foreach ($OrdersBD as $key=>$OrderBD) {
@@ -541,8 +462,7 @@ class LongController extends AppController {
             // ОРДЕР ИСПОЛНЕН
 
 
-            $SCORING = json_decode($OrderBD['startscoring'], true);
-            $this->AddTrackHistoryBD($TREK, $OrderBD, $OrderREST, $SCORING); // Исполнен статус 2
+            $this->AddTrackHistoryBD($TREK, $OrderBD, $OrderREST); // Исполнен статус 2
 
             $countplus = $TREK['countplus'] + 1;
             $ARRTREK['countplus'] = $countplus;
@@ -565,7 +485,6 @@ class LongController extends AppController {
     }
 
     private function WorkStat1($TREK, $AllOrdersREST, $pricenow){
-
 
         // ОБРАБОТКА ОРДЕРОВ СТАТУСА 1
         $OrdersBD = $this->GetOrdersBD($TREK, 1);
@@ -609,13 +528,10 @@ class LongController extends AppController {
                 // Записываем
                 // show($order);
 
-                $starscsoring = SCORING($this->KLINES, $pricenow);
-                $starscsoring = json_encode($starscsoring, true);
 
                 $ARRCHANGE = [];
                 $ARRCHANGE['orderid'] = $order['id'];
                 $ARRCHANGE['type'] = $resultscoring;
-                $ARRCHANGE['startscoring'] = $starscsoring;
                 $this->ChangeARRinBD($ARRCHANGE, $OrderBD['id'], "orders");
 
 
@@ -656,7 +572,12 @@ class LongController extends AppController {
                 if ($distance >= $this->maxposition){
 
                     echo "<b><font color='red'>ОРДЕР ЛИШНИЙ НАДО ОТМЕНЯТЬ</font></b> <br>";
-                    $cancel = $this->EXCHANGECCXT->cancel_order($OrderBD['orderid'], $this->symbol);
+
+                    $params = [
+                        'stop_order_id' => $OrderBD['orderid'],
+                    ];
+                    // Функция отмены стоп ордера
+                    $cancel = $this->EXCHANGECCXT->cancel_order($OrderBD['orderid'], $this->symbol,$params) ;
                     show($cancel);
 
                     $order['id'] = NULL;
@@ -685,15 +606,15 @@ class LongController extends AppController {
             $pricenow = $this->GetPriceSide($this->symbol, $OrderBD['side']);
 
             if ($OrderBD['side'] == "long")  {
-                $price = $OrderREST['price'] + $TREK['step'];
+                $price = $OrderREST['last'] + $TREK['step'];
             }
             if ($OrderBD['side'] == "short")  {
-                $price = $OrderREST['price'] - $TREK['step'];
+                $price = $OrderREST['last'] - $TREK['step'];
             }
 
 
 
-            echo "<font color='green'>Ордер откупился по цене</font> ".$OrderREST['price']."<br>";
+            echo "<font color='green'>Ордер откупился по цене</font> ".$OrderREST['last']."<br>";
             echo "Будем выставлять по: ".$price."<br>";
             echo "Текущая цена - ".$pricenow."<br>";
 
@@ -876,10 +797,6 @@ class LongController extends AppController {
 
 
         // Анализ на выставления оредера по СКОРИНГУ
-
-
-
-
         $STEP = $TREK['step']*$this->skolz;
         $STEP = round($STEP);
 
@@ -910,14 +827,54 @@ class LongController extends AppController {
         }
 
 
-
         if ($TREK['workside'] == "long"){
-            if ($pricenow > $OrderBD['price'] + $STEP) return "LIMIT";
+
+            if ($OrderBD['first'] == 1){
+
+                if ($pricenow < $OrderBD['price']){
+                    // Приближаемся к зоне покупки
+                    if ($pricenow > ($OrderBD['price'] - $TREK['step']*3) ) return "MARKET";
+                }
+
+            }
+            if ($OrderBD['first'] == 0){
+                if ($pricenow < $OrderBD['price']){
+                    // Приближаемся к зоне покупки
+                    if ($pricenow < ($OrderBD['price'] - $TREK['step']*2)) return "MARKET";
+
+
+                }
+            }
         }
         if ($TREK['workside'] == "short"){
 
-            if ($pricenow < $OrderBD['price'] - $STEP) return "LIMIT";
+            if ($OrderBD['first'] == 1){
+                if ($pricenow > $OrderBD['price']){
+                    // Приближаемся к зоне покупки
+                    if ($pricenow < ($OrderBD['price'] + $TREK['step']*3) ) return "MARKET";
+                }
+
+            }
+
+            if ($OrderBD['first'] == 0){
+                echo "НОВЫЙ ОРДЕР<br>";
+                $ss = $OrderBD['price'] + $TREK['step']*0.8;
+                echo "Текущая цена:".$pricenow."<br>";
+                echo "Цена ордера:".$OrderBD['price']."<br>";
+                echo "Рынок должны выставлять при цене".$ss."<br>";
+
+                if ($pricenow > $OrderBD['price']){
+                    // Приближаемся к зоне покупки
+                    if ($pricenow > ($OrderBD['price'] + $TREK['step']*2)) return "MARKET";
+
+
+                }
+            }
+
         }
+
+
+
 
 
 
@@ -929,29 +886,6 @@ class LongController extends AppController {
 
     }
 
-
-    private function CheckOrderSCORING($pricenow){
-
-        $SCORING = SCORING($this->KLINES, $pricenow);
-
-
-
-        if ($SCORING['VOL'] < $this->limitmoneta && $SCORING['VOLPREV'] < $this->limitmoneta){
-
-
-            echo "<font color='green'>Скоринг пройден</font><br>";
-            return true;
-
-
-        }
-
-
-        echo "<font color='red'>Скоринг не пройден</font><br>";
-
-        return false;
-
-
-    }
 
 
     private function CheckDistance($TREK, $pricenow, $OrderBD){
@@ -979,58 +913,12 @@ class LongController extends AppController {
     }
 
 
-    private function ControlBalance($TREK){
-
-
-        // Профит
-        $NOWPROFIT = changemet($TREK['startbalance'],$this->BALANCE['total']);
-
-        if ($NOWPROFIT > $TREK['maxprofit']){
-            $ARRTREK['maxprofit'] = $NOWPROFIT;
-            $this->ChangeARRinBD($ARRTREK, $TREK['id']);
-            // Записываем в трек максимальный баланс
-        }
-
-        $DELTATRELLING = $TREK['maxprofit'] - $NOWPROFIT;
-
-        echo "<b>Текущая дельта прибыли</b>: ".$NOWPROFIT." %<br>";
-
-        echo "<b>Зафиксированный максимальный профит</b>: ".$TREK['maxprofit']." %<br>";
-
-        echo "<b>Дельта треллинг</b>:".$DELTATRELLING." %<br>";
-
-        // Закрытие по общему стопу баланса
-        if ($NOWPROFIT*(-1) > $this->stopl){
-            $this->CloseCycle($TREK, "STOP"); // Закрытие цикла по стопу баланса
-
-        }
-
-        // Закрытие по треллинг стопу
-        if ($TREK['maxprofit'] > $this->maxprofit){ // Если максимальный профит составил более 10% от депозита
-
-            echo "<b color='yellow'>Вошли в фазу треллинга</b><br>";
-
-            if ( $DELTATRELLING > $this->trellingstep ) { // Если разница упала меньше , то закрываем
-
-                $this->CloseCycle($TREK, "TRELLING"); // Закрытие цикла по треллингу
-
-            }
-
-        }
-
-
-
-
-        return true;
-    }
-
-
     private function GetWorkSide($pricenow, $TREK){
 
         echo "Направление движения:".$TREK['side']."<br>";
 
-        if ($pricenow > ($TREK['rangeh'] + $TREK['step']) ) return "HIEND";
-        if ($pricenow < ($TREK['rangel'] - $TREK['step']) ) return "LOWEND";
+        if ($pricenow > $TREK['rangeh'] && $TREK['workside'] == "long" ) return "HIEND";
+        if ($pricenow < $TREK['rangel'] && $TREK['workside'] == "short" ) return "LOWEND";
 
 
         echo "<hr>";
@@ -1059,22 +947,11 @@ class LongController extends AppController {
         var_dump($OrderBD['amount']);
         show($OrderBD['price']);
 
-        if ($type == "LIMIT"){
-            $params = [
-                'time_in_force' => "PostOnly",
-                'reduce_only' => false,
-            ];
-
-            $order = $this->EXCHANGECCXT->create_order($this->symbol,"limit",$sideorder, $OrderBD['amount'], $OrderBD['price'], $params);
-            return $order;
-
-        }
-
 
         if ($type == "MARKET"){
 
-            if ($OrderBD['side'] == "long") $bp = $TREK['avg'];
-            if ($OrderBD['side'] == "short") $bp = $TREK['avg'];
+            if ($OrderBD['side'] == "long") $bp = $TREK['rangel'];
+            if ($OrderBD['side'] == "short") $bp = $TREK['rangeh'];
 
             $params = [
                 'stop_px' => $OrderBD['price'], // trigger $price, required for conditional orders
@@ -1125,20 +1002,7 @@ class LongController extends AppController {
         show($OrderBD['amount']);
         show($price);
         show($params);
-        //   exit("xD");
-
-
-        if ($type == "MARKET"){
-            // Закрываем позицию убыточную
-            $params = [
-                'reduce_only' => true,
-            ];
-
-            $order = $this->EXCHANGECCXT->create_order($this->symbol,"market",$side, $OrderBD['amount'], null, $params);
-
-            echo "<font color='#8b0000'>Создали реверсный ордер </font><br>";
-            return $order;
-        }
+       
 
         $order = $this->EXCHANGECCXT->create_order($this->symbol,"limit",$side, $OrderBD['amount'] , $price, $params);
 
@@ -1420,11 +1284,6 @@ class LongController extends AppController {
         }
 
 
-
-
-
-
-
     }
 
 
@@ -1561,13 +1420,13 @@ class LongController extends AppController {
         $dollar = 0;
 
         if ($OrderBD['stat'] == 1){
-            if ($OrderBD['type'] == "LIMIT") $dollar = $OrderREST['amount']*$OrderREST['price']*(0.025)/100;
+            if ($OrderBD['type'] == "MARKET") $dollar = $OrderREST['amount']*$OrderREST['last']*(-0.075)/100;
         }
 
 
         if ($OrderBD['stat'] == 2 && $OrderBD['side'] == "long"){
             $enter = $OrderBD['lastprice'];
-            $pexit = $OrderREST['price'];
+            $pexit = $OrderREST['last'];
 
             $delta = changemet($enter, $pexit) + 0.025;
 
@@ -1578,17 +1437,13 @@ class LongController extends AppController {
 
         if ($OrderBD['stat'] == 2 && $OrderBD['side'] == "short"){
             $enter = $OrderBD['lastprice'];
-            $pexit = $OrderREST['price'];
+            $pexit = $OrderREST['last'];
             $delta = changemet($pexit, $enter) + 0.025;
             $dollar = ($OrderBD['price']/100)*$delta*$OrderREST['amount'];
         }
 
 
         $ACTBAL = $this->GetBal()['USDT']['total'];
-
-        if ($SCORING === FALSE)  $SCORING = SCORING($this->KLINES, $OrderREST['price']);
-
-
 
 
         $countm =  $this->GlobalStop($TREK, $OrderREST['price'])['ALL'];
@@ -1605,10 +1460,6 @@ class LongController extends AppController {
             'fact' => $OrderREST['price'],
             'bal' => $ACTBAL,
             'dollar' => $dollar,
-            'RSI' => $SCORING['RSI'],
-            'korsize' => $SCORING['KORSIZE'],
-            'color' => $SCORING['COLOR'],
-            'dlinna' => $SCORING['DLINNA'],
             'countminus' => $countm,
         ];
         //ДОБАВЛЯЕМ В ТАБЛИЦУ
